@@ -18,14 +18,20 @@ class SalatPlugin(app: Application) extends Plugin {
     val writeConcern: com.mongodb.WriteConcern,
     val user: Option[String] = None,
     val password: Option[String] = None,
+    val autoConnectRetry: Boolean,
+    val socketKeepAlive: Boolean,
+    val socketTimeout:Int,
+    val connectTimeout:Int,
+    val connectionsPerHost:Int,
+    val threadsAllowedToBlockForConnectionMultiplier:Int,
     private var conn: MongoConnection = null
   ){
-
     def connection: MongoConnection = {
       if (conn == null) {
-        conn = MongoConnection(hosts)
-
-        val authOpt = for {
+        val options = MongoOptions(autoConnectRetry = autoConnectRetry, socketKeepAlive = socketKeepAlive, socketTimeout = socketTimeout,
+          connectTimeout = connectTimeout, connectionsPerHost = connectionsPerHost, threadsAllowedToBlockForConnectionMultiplier = threadsAllowedToBlockForConnectionMultiplier)
+        conn = MongoConnection(hosts,options)
+          val authOpt = for {
           u <- user
           p <- password
         } yield connection(dbName).authenticate(u, p)
@@ -33,7 +39,6 @@ class SalatPlugin(app: Application) extends Plugin {
         if (!authOpt.getOrElse(true)) {
           throw configuration.reportError("mongodb", "Access denied to MongoDB database: [" + dbName + "] with user: [" + user.getOrElse("") + "]")
         }
-
         conn.setWriteConcern(writeConcern)
       }
       conn
@@ -90,7 +95,14 @@ class SalatPlugin(app: Application) extends Plugin {
       val writeConcern = uri.options.getWriteConcern
       val user = uri.username
       val password = uri.password.map(_.mkString).filterNot(_.isEmpty)
-      sourceKey -> MongoSource(hosts, db, writeConcern, user, password)
+      val autoConnectRetry = uri.options.isAutoConnectRetry
+      val socketKeepAlive = uri.options.isSocketKeepAlive
+      val socketTimeout = uri.options.getSocketTimeout
+      val connectTimeout = uri.options.getConnectTimeout
+      val connectionsPerHost = uri.options.getConnectionsPerHost
+      val threadsAllowedToBlockForConnectionMultiplier = uri.options.getThreadsAllowedToBlockForConnectionMultiplier
+      sourceKey -> MongoSource(hosts, db, writeConcern, user, password,autoConnectRetry,
+        socketKeepAlive,socketTimeout,connectTimeout,connectionsPerHost,threadsAllowedToBlockForConnectionMultiplier)
     }.getOrElse {
       val dbName = source.getString("db").getOrElse(throw configuration.reportError("mongodb." + sourceKey + ".db", "db missing for source[" + sourceKey + "]"))
 
@@ -99,7 +111,12 @@ class SalatPlugin(app: Application) extends Plugin {
       val port = source.getInt("port").getOrElse(27017)
       val user:Option[String] = source.getString("user")
       val password:Option[String] = source.getString("password")
-
+      val autoConnectRetry = source.getBoolean("autoConnectRetry")
+      val socketKeepAlive = source.getBoolean("socketKeepAlive")
+      val socketTimeout = source.getInt("socketTimeout")
+      val connectTimeout = source.getInt("connectTimeout")
+      val connectionsPerHost = source.getInt("connectionsPerHost")
+      val threadsAllowedToBlockForConnectionMultiplier = source.getInt("threadsAllowedToBlockForConnectionMultiplier")
       // Replica set config
       val hosts: List[ServerAddress] = source.getConfig("replicaset").map { replicaset =>
         replicaset.subKeys.map { hostKey =>
@@ -109,14 +126,15 @@ class SalatPlugin(app: Application) extends Plugin {
           new ServerAddress(host, port)
         }.toList.reverse
       }.getOrElse(List.empty)
-
       val writeConcern = WriteConcern.valueOf(source.getString("writeconcern", Some(Set("fsyncsafe", "replicassafe", "safe", "normal"))).getOrElse("safe"))
 
       // If there are replicasets configured go with those otherwise fallback to simple config
       if (hosts.isEmpty)
-        sourceKey -> MongoSource(List(new ServerAddress(host, port)), dbName, writeConcern, user, password)
+        sourceKey -> MongoSource(List(new ServerAddress(host, port)), dbName, writeConcern, user, password, autoConnectRetry.getOrElse(false), socketKeepAlive.getOrElse(false),
+          socketTimeout.getOrElse(0), connectTimeout.getOrElse(10000), connectionsPerHost.getOrElse(10), threadsAllowedToBlockForConnectionMultiplier.getOrElse(5))
       else
-        sourceKey -> MongoSource(hosts, dbName, writeConcern, user, password)
+        sourceKey -> MongoSource(hosts, dbName, writeConcern, user, password, autoConnectRetry.getOrElse(false), socketKeepAlive.getOrElse(false),
+          socketTimeout.getOrElse(0), connectTimeout.getOrElse(10000), connectionsPerHost.getOrElse(10), threadsAllowedToBlockForConnectionMultiplier.getOrElse(5))
     }
   }.toMap
 
